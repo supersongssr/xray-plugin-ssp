@@ -3,10 +3,11 @@ package ssrpanel
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	statsservice "github.com/xtls/xray-core/app/stats/command"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
-	"strings"
-	statsservice "github.com/v2fly/v2ray-core/v4/app/stats/command"
 )
 
 type StatsServiceClient struct {

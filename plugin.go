@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/v2fly/v2ray-core/v4/common/errors"
+	"github.com/xtls/xray-core/common/errors"
 	"google.golang.org/grpc/status"
 )
 
