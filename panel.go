@@ -258,8 +258,8 @@ func (p *Panel) convertUser(userModel UserModel) *protocol.User {
 			Level: userCfg.Level,
 			Email: userModel.Email,
 			Account: serial.ToTypedMessage(&vmess.Account{
-				Id:               userModel.VmessID,
-				AlterId:          userCfg.AlterID,
+				Id: userModel.VmessID,
+				// AlterId:          userCfg.AlterID,
 				SecuritySettings: userCfg.securityConfig,
 			}),
 		}

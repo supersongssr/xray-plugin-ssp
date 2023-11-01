@@ -15,12 +15,12 @@ func init() {
 		if err != nil {
 			fatal(err)
 		}
-		newError("v4.44.0 started").AtWarning().WriteToLog()
+		newError("xray v1.8.4 ssp started").AtWarning().WriteToLog()
 	}()
 }
 
 func run() error {
-	commandLine.Parse(os.Args[1:])
+	cmdLine.Parse(os.Args[2:]) //fixed xray run falg bug
 
 	cfg, err := getConfig()
 	if err != nil || *test || cfg == nil {
@@ -37,7 +37,7 @@ func run() error {
 
 	go func() {
 		apiInbound := getInboundConfigByTag(cfg.v2rayConfig.API.Tag, cfg.v2rayConfig.InboundConfigs)
-		gRPCAddr := fmt.Sprintf("%s:%d", apiInbound.ListenOn.String(), apiInbound.PortRange.From)
+		gRPCAddr := fmt.Sprintf("%s:%d", apiInbound.ListenOn.String(), apiInbound.PortList.Range[0].From)
 		gRPCConn, err := connectGRPC(gRPCAddr, 10*time.Second)
 		if err != nil {
 			if s, ok := status.FromError(err); ok {
@@ -63,7 +63,7 @@ func newErrorf(format string, a ...interface{}) *errors.Error {
 }
 
 func newError(values ...interface{}) *errors.Error {
-	values = append([]interface{}{"SSRPanelPlugin: "}, values...)
+	values = append([]interface{}{"PluginSsp: "}, values...)
 	return errors.New(values...)
 }
 

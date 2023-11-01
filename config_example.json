@@ -55,6 +55,8 @@
     "nodeId": 1,
     // every N seconds
     "checkRate": 60,
+    // ip device limit 
+    "ipLimit":7,
     // change this to true if you want to ignore users which has an empty vmess_id
     "ignoreEmptyVmessID": false,
     // user config

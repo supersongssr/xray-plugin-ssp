@@ -19,13 +19,13 @@ import (
 )
 
 var (
-	commandLine = flag.NewFlagSet(os.Args[0]+"-plugin-ssrpanel", flag.ContinueOnError)
+	cmdLine = flag.NewFlagSet(os.Args[0]+"-plugin-ssp", flag.ContinueOnError)
 
-	configFile = commandLine.String("config", "", "Config file for V2Ray.")
-	_          = commandLine.Bool("version", false, "Show current version of V2Ray.")
-	test       = commandLine.Bool("test", false, "Test config file only, without launching V2Ray server.")
-	_          = commandLine.String("format", "json", "Format of input file.")
-	_          = commandLine.Bool("plugin", false, "True to load plugins.")
+	configFile = cmdLine.String("config", "", "Config file for V2Ray.")
+	_          = cmdLine.Bool("version", false, "Show current version of V2Ray.")
+	test       = cmdLine.Bool("test", false, "Test config file only, without launching V2Ray server.")
+	_          = cmdLine.String("format", "json", "Format of input file.")
+	_          = cmdLine.Bool("plugin", false, "True to load plugins.")
 )
 
 type UserConfig struct {
@@ -120,7 +120,7 @@ func checkCfg(cfg *Config) error {
 	} else if apiInbound.Protocol != "dokodemo-door" {
 		return errors.New(fmt.Sprintf("The protocol of inbound tagged %s must be \"dokodemo-door\"", apiTag))
 	} else {
-		if apiInbound.ListenOn == nil || apiInbound.PortRange == nil {
+		if apiInbound.ListenOn == nil || apiInbound.PortList == nil {
 			return errors.New(fmt.Sprintf("Fields, \"listen\" and \"port\", of inbound tagged %s must be set", apiTag))
 		}
 	}
