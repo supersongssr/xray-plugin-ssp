@@ -129,7 +129,7 @@ func (p *Panel) do() error {
 			})
 	}
 
-	addedUserCount, deletedUserCount, err = p.syncUser()
+	addedUserCount, deletedUserCount, _ = p.syncUser()
 	return nil
 }
 
@@ -203,6 +203,26 @@ func (p *Panel) syncUser() (addedUserCount, deletedUserCount int, err error) {
 		}
 
 		delUserModels = append(delUserModels, userModel)
+	}
+
+	// song 再通过ip数量来删除用户
+	var uIPs int64
+	var uIPStr string
+	for _, user := range p.userModels { //遍历之前的userModels 就是上一次的用户数量. 用来统计用户的IP
+		uIPs, uIPStr, err = p.statsServiceClient.getUserIP(user.Email)
+		// newErrorf("============= User email  : %s", user.Email).AtDebug().WriteToLog()
+		// newErrorf("============= User ip is  : %s", uIPStr).AtDebug().WriteToLog()
+		if err != nil {
+			return
+		}
+		if uIPs > p.IPLimit { //如果用户的IP数量,大于了系统规定的数量. 就删除该用户.下次连接,再加入该用户.
+			if inUserModels(&user, delUserModels) {
+				continue // 如果在删除用户列表中,就跳过
+			}
+			delUserModels = append(delUserModels, user) //把该用户添加到删除用户列表中
+			newErrorf("-------- Limit User email  : %s", user.Email).AtDebug().WriteToLog()
+			newErrorf("-------- Limit User ip is  : %s", uIPStr).AtDebug().WriteToLog()
+		}
 	}
 
 	// Delete

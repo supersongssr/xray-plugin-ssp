@@ -45,3 +45,21 @@ func (s *StatsServiceClient) getUserTraffic(name string, reset bool) (uint64, er
 
 	return uint64(res.Stat.Value), nil
 }
+
+// song get user ip
+func (s *StatsServiceClient) getUserIP(email string) (int64, string, error) {
+	name := fmt.Sprintf("user>>>%s>>>traffic>>>ips", email)
+	req := &statsservice.GetStatsRequest{
+		Name:   name,
+		Reset_: true,
+	}
+	res, err := s.GetStats(context.Background(), req)
+	if err != nil {
+		if status, ok := status.FromError(err); ok && strings.HasSuffix(status.Message(), fmt.Sprintf("%s not found.", name)) {
+			return 0, "", nil
+		}
+
+		return 0, "", err
+	}
+	return res.Stat.Value, res.Stat.Name, nil
+}

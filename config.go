@@ -58,6 +58,7 @@ func (c *UserConfig) UnmarshalJSON(data []byte) error {
 type Config struct {
 	NodeID             uint         `json:"nodeId"`
 	CheckRate          int          `json:"checkRate"`
+	IPLimit            int64        `json:"ipLimit"`
 	MySQL              *MySQLConfig `json:"mysql"`
 	UserConfig         *UserConfig  `json:"user"`
 	IgnoreEmptyVmessID bool         `json:"ignoreEmptyVmessID"`
