@@ -32,6 +32,7 @@ type UserConfig struct {
 	InboundTag     string `json:"inboundTag"`
 	Level          uint32 `json:"level"`
 	AlterID        uint32 `json:"alterId"`
+	Flow           string `json:"flow"`
 	SecurityStr    string `json:"securityConfig"`
 	securityConfig *protocol.SecurityConfig
 }

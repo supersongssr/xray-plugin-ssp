@@ -262,7 +262,8 @@ func (p *Panel) convertUser(userModel UserModel) *protocol.User {
 			Level: userCfg.Level,
 			Email: userModel.Email,
 			Account: serial.ToTypedMessage(&vless.Account{
-				Id: userModel.VmessID,
+				Id:   userModel.VmessID,
+				Flow: userCfg.Flow,
 			}),
 		}
 	} else if inbound.Protocol == "trojan" {
