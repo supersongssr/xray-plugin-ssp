@@ -49,6 +49,17 @@ func (c *UserConfig) UnmarshalJSON(data []byte) error {
 		cfg.SecurityStr = "AUTO"
 	}
 
+	// VLESS Flow compatibility: map old flows to new flows (xray-core v1.8.4 -> v26)
+	// Old xtls-rprx-direct/splice are deprecated
+	switch cfg.Flow {
+	case "xtls-rprx-direct", "xtls-rprx-splice":
+		cfg.Flow = "" // Deprecated, map to empty
+	case "xtls-rprx-vision":
+		// Keep vision flow - it's still supported in v26
+		// Just remove the xtls- prefix if present
+		cfg.Flow = "xtls-rprx-vision"
+	}
+
 	cfg.securityConfig = &protocol.SecurityConfig{
 		Type: protocol.SecurityType(protocol.SecurityType_value[strings.ToUpper(cfg.SecurityStr)]),
 	}

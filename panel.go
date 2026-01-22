@@ -205,23 +205,21 @@ func (p *Panel) syncUser() (addedUserCount, deletedUserCount int, err error) {
 		delUserModels = append(delUserModels, userModel)
 	}
 
-	// song 再通过ip数量来删除用户
-	var uIPs int64
-	var uIPStr string
-	for _, user := range p.userModels { //遍历之前的userModels 就是上一次的用户数量. 用来统计用户的IP
-		uIPs, uIPStr, err = p.statsServiceClient.getUserIP(user.Email)
+	// 通过在线会话数来限制用户
+	var onlineSessions int64
+	for _, user := range p.userModels { //遍历之前的userModels 就是上一次的用户数量. 用来统计用户的在线会话
+		onlineSessions, err = p.statsServiceClient.getUserOnlineSessions(user.Email)
 		// newErrorf("============= User email  : %s", user.Email).AtDebug().WriteToLog()
-		// newErrorf("============= User ip is  : %s", uIPStr).AtDebug().WriteToLog()
+		// newErrorf("============= Online sessions: %d", onlineSessions).AtDebug().WriteToLog()
 		if err != nil {
 			return
 		}
-		if uIPs > p.IPLimit { //如果用户的IP数量,大于了系统规定的数量. 就删除该用户.下次连接,再加入该用户.
+		if onlineSessions > p.IPLimit { //如果用户的在线会话数,大于了系统规定的数量. 就删除该用户.下次连接,再加入该用户.
 			if inUserModels(&user, delUserModels) {
 				continue // 如果在删除用户列表中,就跳过
 			}
 			delUserModels = append(delUserModels, user) //把该用户添加到删除用户列表中
-			newErrorf("-------- Limit User email  : %s", user.Email).AtDebug().WriteToLog()
-			newErrorf("-------- Limit User ip is  : %s", uIPStr).AtDebug().WriteToLog()
+			newErrorf("[IP限制] 用户: %s, 当前在线IP数: %d, 阈值: %d", user.Email, onlineSessions, p.IPLimit).AtDebug().WriteToLog()
 		}
 	}
 

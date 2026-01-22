@@ -46,20 +46,19 @@ func (s *StatsServiceClient) getUserTraffic(name string, reset bool) (uint64, er
 	return uint64(res.Stat.Value), nil
 }
 
-// song get user ip
-func (s *StatsServiceClient) getUserIP(email string) (int64, string, error) {
-	name := fmt.Sprintf("user>>>%s>>>traffic>>>ips", email)
+// getUserOnlineSessions 获取用户在线会话数（替代原来的 IP 统计）
+func (s *StatsServiceClient) getUserOnlineSessions(email string) (int64, error) {
+	name := fmt.Sprintf("user>>>%s>>>online", email)
 	req := &statsservice.GetStatsRequest{
 		Name:   name,
-		Reset_: true,
+		Reset_: false, // 在线会话数不需要重置
 	}
-	res, err := s.GetStats(context.Background(), req)
+	res, err := s.GetStatsOnline(context.Background(), req)
 	if err != nil {
 		if status, ok := status.FromError(err); ok && strings.HasSuffix(status.Message(), fmt.Sprintf("%s not found.", name)) {
-			return 0, "", nil
+			return 0, nil // 用户不在线时返回 0
 		}
-
-		return 0, "", err
+		return 0, err
 	}
-	return res.Stat.Value, res.Stat.Name, nil
+	return int64(res.Stat.Value), nil
 }

@@ -1,6 +1,7 @@
 package ssrpanel
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -15,7 +16,7 @@ func init() {
 		if err != nil {
 			fatal(err)
 		}
-		newError("xray v1.8.4 ssp iplimit started").AtWarning().WriteToLog()
+		newError("xray v26.1.18 ssp online limit started").AtWarning().WriteToLog()
 	}()
 }
 
@@ -58,17 +59,55 @@ func run() error {
 	return nil
 }
 
-func newErrorf(format string, a ...interface{}) *errors.Error {
-	return newError(fmt.Sprintf(format, a...))
+func newErrorf(format string, a ...interface{}) *logWriter {
+	return &logWriter{err: errors.New(fmt.Sprintf(format, a...))}
 }
 
-func newError(values ...interface{}) *errors.Error {
+func newError(values ...interface{}) *logWriter {
 	values = append([]interface{}{"PluginSsp: "}, values...)
-	return errors.New(values...)
+	return &logWriter{err: errors.New(values...)}
+}
+
+// logWriter 兼容旧版本的链式调用 API
+type logWriter struct {
+	err error
+}
+
+func (l *logWriter) AtDebug() *logWriter {
+	return l
+}
+
+func (l *logWriter) AtInfo() *logWriter {
+	return l
+}
+
+func (l *logWriter) AtWarning() *logWriter {
+	return l
+}
+
+func (l *logWriter) AtError() *logWriter {
+	return l
+}
+
+func (l *logWriter) Base(inner error) *logWriter {
+	if inner != nil {
+		l.err = fmt.Errorf("%v: %w", l.err, inner)
+	}
+	return l
+}
+
+func (l *logWriter) WriteToLog() {
+	ctx := context.Background()
+	switch l.err.(type) {
+	case *errors.Error:
+		errors.LogDebug(ctx, l.err)
+	default:
+		errors.LogDebug(ctx, l.err)
+	}
 }
 
 func fatal(values ...interface{}) {
-	newError(values...).AtError().WriteToLog()
+	newError(values...).WriteToLog()
 	// Wait log
 	time.Sleep(1 * time.Second)
 	os.Exit(-2)
