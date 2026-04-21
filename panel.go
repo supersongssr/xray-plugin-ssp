@@ -10,6 +10,7 @@ import (
 	"github.com/shirou/gopsutil/load"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
+	"github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
@@ -237,7 +238,12 @@ func (p *Panel) syncUser() (addedUserCount, deletedUserCount int, err error) {
 
 	// Add
 	for _, userModel := range addUserModels {
-		if err = p.handlerServiceClient.AddUser(p.convertUser(userModel)); err != nil {
+		u := p.convertUser(userModel)
+		if u == nil {
+			newErrorf("skip add user due to unsupported protocol or error, user: %#v", userModel).AtWarning().WriteToLog()
+			continue
+		}
+		if err = p.handlerServiceClient.AddUser(u); err != nil {
 			if p.IgnoreEmptyVmessID {
 				newErrorf("add user err \"%s\" user: %#v", err, userModel).AtWarning().WriteToLog()
 				continue
@@ -255,33 +261,40 @@ func (p *Panel) syncUser() (addedUserCount, deletedUserCount int, err error) {
 func (p *Panel) convertUser(userModel UserModel) *protocol.User {
 	userCfg := p.UserConfig
 	inbound := getInboundConfigByTag(p.UserConfig.InboundTag, p.v2rayConfig.InboundConfigs)
-	if inbound.Protocol == "vless" {
-		return &protocol.User{
-			Level: userCfg.Level,
-			Email: userModel.Email,
-			Account: serial.ToTypedMessage(&vless.Account{
-				Id:   userModel.VmessID,
-				Flow: userCfg.Flow,
-			}),
-		}
-	} else if inbound.Protocol == "trojan" {
-		return &protocol.User{
-			Level: userCfg.Level,
-			Email: userModel.Email,
-			Account: serial.ToTypedMessage(&trojan.Account{
-				Password: userModel.VmessID,
-			}),
-		}
-	} else {
-		return &protocol.User{
-			Level: userCfg.Level,
-			Email: userModel.Email,
-			Account: serial.ToTypedMessage(&vmess.Account{
-				Id: userModel.VmessID,
-				// AlterId:          userCfg.AlterID,
-				SecuritySettings: userCfg.securityConfig,
-			}),
-		}
+	if inbound == nil {
+		return nil
+	}
+
+	var accountMsg *serial.TypedMessage
+
+	switch inbound.Protocol {
+	case "vless":
+		accountMsg = serial.ToTypedMessage(&vless.Account{
+			Id:   userModel.VmessID,
+			Flow: userCfg.Flow,
+		})
+	case "trojan":
+		accountMsg = serial.ToTypedMessage(&trojan.Account{
+			Password: userModel.VmessID,
+		})
+	case "vmess":
+		accountMsg = serial.ToTypedMessage(&vmess.Account{
+			Id:               userModel.VmessID,
+			SecuritySettings: userCfg.securityConfig,
+		})
+	case "hysteria", "hysteria2":
+		accountMsg = serial.ToTypedMessage(&account.Account{
+			Auth: userModel.VmessID,
+		})
+	default:
+		newErrorf("Warning: Unsupported protocol '%s' for user %s", inbound.Protocol, userModel.Email).AtWarning().WriteToLog()
+		return nil
+	}
+
+	return &protocol.User{
+		Level:   userCfg.Level,
+		Email:   userModel.Email,
+		Account: accountMsg,
 	}
 }
 
