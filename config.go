@@ -29,12 +29,57 @@ var (
 )
 
 type UserConfig struct {
-	InboundTag     string `json:"inboundTag"`
-	Level          uint32 `json:"level"`
-	AlterID        uint32 `json:"alterId"`
-	Flow           string `json:"flow"`
-	SecurityStr    string `json:"securityConfig"`
+	InboundTag     string            `json:"inboundTag"`
+	InboundTags    []string          `json:"inboundTags"`
+	Level          uint32            `json:"level"`
+	AlterID        uint32            `json:"alterId"`
+	Flow           string            `json:"flow"`
+	Flows          map[string]string `json:"flows"`
+	SecurityStr    string            `json:"securityConfig"`
 	securityConfig *protocol.SecurityConfig
+}
+
+func (c *UserConfig) GetFlow(tag string) string {
+	if flow, ok := c.Flows[tag]; ok {
+		return flow
+	}
+	return c.Flow
+}
+
+func (c *UserConfig) GetTags() []string {
+	var rawTags []string
+	hasValidInboundTags := false
+
+	// 检查 InboundTags 是否包含有效值
+	for _, tag := range c.InboundTags {
+		if strings.TrimSpace(tag) != "" {
+			hasValidInboundTags = true
+			break
+		}
+	}
+
+	if hasValidInboundTags {
+		// 如果 InboundTags 有效，完全忽略 InboundTag
+		rawTags = c.InboundTags
+	} else if strings.TrimSpace(c.InboundTag) != "" {
+		// 否则回退到 InboundTag
+		rawTags = []string{c.InboundTag}
+	}
+
+	// 去重且过滤空字符串
+	tagsMap := make(map[string]struct{})
+	for _, tag := range rawTags {
+		t := strings.TrimSpace(tag)
+		if t != "" {
+			tagsMap[t] = struct{}{}
+		}
+	}
+
+	tags := make([]string, 0, len(tagsMap))
+	for tag := range tagsMap {
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 func (c *UserConfig) UnmarshalJSON(data []byte) error {
@@ -51,13 +96,20 @@ func (c *UserConfig) UnmarshalJSON(data []byte) error {
 
 	// VLESS Flow compatibility: map old flows to new flows (xray-core v1.8.4 -> v26)
 	// Old xtls-rprx-direct/splice are deprecated
-	switch cfg.Flow {
-	case "xtls-rprx-direct", "xtls-rprx-splice":
-		cfg.Flow = "" // Deprecated, map to empty
-	case "xtls-rprx-vision":
-		// Keep vision flow - it's still supported in v26
-		// Just remove the xtls- prefix if present
-		cfg.Flow = "xtls-rprx-vision"
+	mapFlow := func(f string) string {
+		switch f {
+		case "xtls-rprx-direct", "xtls-rprx-splice":
+			return "" // Deprecated, map to empty
+		case "xtls-rprx-vision":
+			return "xtls-rprx-vision"
+		default:
+			return f
+		}
+	}
+
+	cfg.Flow = mapFlow(cfg.Flow)
+	for tag, flow := range cfg.Flows {
+		cfg.Flows[tag] = mapFlow(flow)
 	}
 
 	cfg.securityConfig = &protocol.SecurityConfig{
@@ -138,8 +190,15 @@ func checkCfg(cfg *Config) error {
 		}
 	}
 
-	if inbound := getInboundConfigByTag(cfg.UserConfig.InboundTag, cfg.v2rayConfig.InboundConfigs); inbound == nil {
-		return errors.New(fmt.Sprintf("Miss an inbound tagged %s", cfg.UserConfig.InboundTag))
+	tags := cfg.UserConfig.GetTags()
+	if len(tags) == 0 {
+		return errors.New("At least one inboundTag must be set")
+	}
+
+	for _, tag := range tags {
+		if inbound := getInboundConfigByTag(tag, cfg.v2rayConfig.InboundConfigs); inbound == nil {
+			return errors.New(fmt.Sprintf("Miss an inbound tagged %s", tag))
+		}
 	}
 
 	return nil

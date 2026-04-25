@@ -11,27 +11,25 @@ import (
 
 type HandlerServiceClient struct {
 	command.HandlerServiceClient
-	inboundTag string
 }
 
-func NewHandlerServiceClient(client *grpc.ClientConn, inboundTag string) *HandlerServiceClient {
+func NewHandlerServiceClient(client *grpc.ClientConn) *HandlerServiceClient {
 	return &HandlerServiceClient{
 		HandlerServiceClient: command.NewHandlerServiceClient(client),
-		inboundTag:           inboundTag,
 	}
 }
 
-func (h *HandlerServiceClient) DelUser(email string) error {
+func (h *HandlerServiceClient) RemoveUser(tag string, email string) error {
 	req := &command.AlterInboundRequest{
-		Tag:       h.inboundTag,
+		Tag:       tag,
 		Operation: serial.ToTypedMessage(&command.RemoveUserOperation{Email: email}),
 	}
 	return h.AlterInbound(req)
 }
 
-func (h *HandlerServiceClient) AddUser(user *protocol.User) error {
+func (h *HandlerServiceClient) AddUser(tag string, user *protocol.User) error {
 	req := &command.AlterInboundRequest{
-		Tag:       h.inboundTag,
+		Tag:       tag,
 		Operation: serial.ToTypedMessage(&command.AddUserOperation{User: user}),
 	}
 	return h.AlterInbound(req)

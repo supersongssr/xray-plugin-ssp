@@ -16,7 +16,7 @@ func init() {
 		if err != nil {
 			fatal(err)
 		}
-		newError("xray v26.1.18 ssp online limit started").AtWarning().WriteToLog()
+		newError("xray v26.1.18 ssp multi-inbound broadcast started").AtWarning().WriteToLog()
 	}()
 }
 

@@ -2,6 +2,9 @@ package ssrpanel
 
 import (
 	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
@@ -15,6 +18,8 @@ import (
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Panel struct {
@@ -22,9 +27,13 @@ type Panel struct {
 	handlerServiceClient *HandlerServiceClient
 	statsServiceClient   *StatsServiceClient
 	db                   *DB
-	userModels           []UserModel
-	startAt              time.Time
-	node                 *Node
+
+	mu         sync.Mutex
+	isSyncing  atomic.Bool
+	userModels []UserModel
+
+	startAt time.Time
+	node    *Node
 }
 
 func NewPanel(gRPCConn *grpc.ClientConn, db *DB, cfg *Config) (*Panel, error) {
@@ -38,7 +47,7 @@ func NewPanel(gRPCConn *grpc.ClientConn, db *DB, cfg *Config) (*Panel, error) {
 	return &Panel{
 		Config:               cfg,
 		db:                   db,
-		handlerServiceClient: NewHandlerServiceClient(gRPCConn, cfg.UserConfig.InboundTag),
+		handlerServiceClient: NewHandlerServiceClient(gRPCConn),
 		statsServiceClient:   NewStatsServiceClient(gRPCConn),
 		startAt:              time.Now(),
 		node:                 node,
@@ -60,6 +69,13 @@ func (p *Panel) Start() {
 }
 
 func (p *Panel) do() error {
+	// 防重入：确保同步周期不重叠执行
+	if !p.isSyncing.CompareAndSwap(false, true) {
+		newErrorf("panel#do is still syncing, skipping this cycle to prevent race conditions").AtWarning().WriteToLog()
+		return nil
+	}
+	defer p.isSyncing.Store(false)
+
 	var addedUserCount, deletedUserCount, onlineUsers int
 	var uplinkTotal, downlinkTotal uint64
 
@@ -140,8 +156,14 @@ type userStatsLogs struct {
 }
 
 func (p *Panel) getTraffic() (logs []userStatsLogs, err error) {
+	// 加锁创建 userModels 的快照，避免网络 I/O 期间持有锁
+	p.mu.Lock()
+	usersSnapshot := make([]UserModel, len(p.userModels))
+	copy(usersSnapshot, p.userModels)
+	p.mu.Unlock()
+
 	var downlink, uplink uint64
-	for _, user := range p.userModels {
+	for _, user := range usersSnapshot {
 		downlink, err = p.statsServiceClient.getUserDownlink(user.Email)
 		if err != nil {
 			return
@@ -153,10 +175,6 @@ func (p *Panel) getTraffic() (logs []userStatsLogs, err error) {
 		}
 
 		if uplink+downlink > 0 {
-			if err != nil {
-				return
-			}
-
 			logs = append(logs, userStatsLogs{
 				UserTrafficLog: UserTrafficLog{
 					UserID:   user.ID,
@@ -182,85 +200,147 @@ func (p *Panel) syncUser() (addedUserCount, deletedUserCount int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(userModels) == 0 {
-		return 0, 0, err
+	if len(userModels) == 0 && len(p.userModels) == 0 {
+		return 0, 0, nil
 	}
+
+	// 加锁创建 userModels 的快照
+	p.mu.Lock()
+	usersSnapshot := make([]UserModel, len(p.userModels))
+	copy(usersSnapshot, p.userModels)
+	p.mu.Unlock()
 
 	// Calculate addition users
 	addUserModels := make([]UserModel, 0)
 	for _, userModel := range userModels {
-		if inUserModels(&userModel, p.userModels) {
+		if inUserModels(&userModel, usersSnapshot) {
 			continue
 		}
-
 		addUserModels = append(addUserModels, userModel)
 	}
 
 	// Calculate deletion users
 	delUserModels := make([]UserModel, 0)
-	for _, userModel := range p.userModels {
+	for _, userModel := range usersSnapshot {
 		if inUserModels(&userModel, userModels) {
 			continue
 		}
-
 		delUserModels = append(delUserModels, userModel)
 	}
 
 	// 通过在线会话数来限制用户
 	var onlineSessions int64
-	for _, user := range p.userModels { //遍历之前的userModels 就是上一次的用户数量. 用来统计用户的在线会话
+	for _, user := range usersSnapshot {
 		onlineSessions, err = p.statsServiceClient.getUserOnlineSessions(user.Email)
-		// newErrorf("============= User email  : %s", user.Email).AtDebug().WriteToLog()
-		// newErrorf("============= Online sessions: %d", onlineSessions).AtDebug().WriteToLog()
 		if err != nil {
 			return
 		}
-		if onlineSessions > p.IPLimit { //如果用户的在线会话数,大于了系统规定的数量. 就删除该用户.下次连接,再加入该用户.
+		if onlineSessions > p.IPLimit {
 			if inUserModels(&user, delUserModels) {
-				continue // 如果在删除用户列表中,就跳过
+				continue
 			}
-			delUserModels = append(delUserModels, user) //把该用户添加到删除用户列表中
+			delUserModels = append(delUserModels, user)
 			newErrorf("[IP限制] 用户: %s, 当前在线IP数: %d, 阈值: %d", user.Email, onlineSessions, p.IPLimit).AtDebug().WriteToLog()
 		}
 	}
 
-	// Delete
+	// 预加载 Tags，严禁在内层循环重复调用 GetTags() 以防 Map 频繁分配引发 GC 抖动
+	activeTags := p.UserConfig.GetTags()
+
+	// Delete - 并发广播删除
 	for _, userModel := range delUserModels {
+		var wg sync.WaitGroup
+		for _, tag := range activeTags {
+			wg.Add(1)
+			go func(t string) {
+				defer wg.Done()
+				if err := p.handlerServiceClient.RemoveUser(t, userModel.Email); err != nil {
+					// 忽略 NotFound 错误，因为可能是用户根本就不存在
+					if status.Code(err) != codes.NotFound && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+						newErrorf("Warning: failed to remove user %s from tag %s: %v", userModel.Email, t, err).AtWarning().WriteToLog()
+					}
+				}
+			}(tag)
+		}
+		wg.Wait()
+
+		// 只有完成网络调用后，才加锁清理内存状态
+		p.mu.Lock()
 		if i := findUserModelIndex(&userModel, p.userModels); i != -1 {
 			p.userModels = append(p.userModels[:i], p.userModels[i+1:]...)
-			if err = p.handlerServiceClient.DelUser(userModel.Email); err != nil {
-				return
-			}
 			deletedUserCount++
-			newErrorf("Deleted user: id=%d, VmessID=%s, Email=%s", userModel.ID, userModel.VmessID, userModel.Email).AtDebug().WriteToLog()
+			newErrorf("Deleted user: id=%d, V2rayUUID=%s, Email=%s", userModel.ID, userModel.VmessID, userModel.Email).AtDebug().WriteToLog()
 		}
+		p.mu.Unlock()
 	}
 
-	// Add
+	// Add - 并发广播添加与事务性一致性防护
 	for _, userModel := range addUserModels {
-		u := p.convertUser(userModel)
-		if u == nil {
-			newErrorf("skip add user due to unsupported protocol or error, user: %#v", userModel).AtWarning().WriteToLog()
-			continue
-		}
-		if err = p.handlerServiceClient.AddUser(u); err != nil {
-			if p.IgnoreEmptyVmessID {
-				newErrorf("add user err \"%s\" user: %#v", err, userModel).AtWarning().WriteToLog()
+		var wg sync.WaitGroup
+		var successCount atomic.Uint32
+		var errCount atomic.Uint32
+
+		for _, tag := range activeTags {
+			u := p.convertUser(tag, userModel)
+			if u == nil {
+				newErrorf("skip add user to tag %s due to unsupported protocol or error, user: %#v", tag, userModel).AtWarning().WriteToLog()
+				errCount.Add(1)
 				continue
 			}
-			fatal("add user err ", err, userModel)
+
+			wg.Add(1)
+			go func(t string, userObj *protocol.User) {
+				defer wg.Done()
+				err := p.handlerServiceClient.AddUser(t, userObj)
+				if err != nil {
+					// 捕获并识别 AlreadyExists，将其视为成功
+					if status.Code(err) == codes.AlreadyExists || strings.Contains(strings.ToLower(err.Error()), "already exists") {
+						successCount.Add(1)
+					} else {
+						newErrorf("Warning: failed to add user %s to tag %s: %v", userModel.Email, t, err).AtWarning().WriteToLog()
+						errCount.Add(1)
+					}
+				} else {
+					successCount.Add(1)
+				}
+			}(tag, u)
 		}
-		p.userModels = append(p.userModels, userModel)
-		addedUserCount++
-		newErrorf("Added user: id=%d, VmessID=%s, Email=%s", userModel.ID, userModel.VmessID, userModel.Email).AtDebug().WriteToLog()
+		wg.Wait()
+
+		// 只有所有 Tag 都成功（或已存在），才将其加入 p.userModels 追踪列表
+		if successCount.Load() > 0 && errCount.Load() == 0 {
+			p.mu.Lock()
+			if !inUserModels(&userModel, p.userModels) {
+				p.userModels = append(p.userModels, userModel)
+				addedUserCount++
+				newErrorf("Added user: id=%d, V2rayUUID=%s, Email=%s (to %d/%d tags)", userModel.ID, userModel.VmessID, userModel.Email, successCount.Load(), len(activeTags)).AtDebug().WriteToLog()
+			}
+			p.mu.Unlock()
+		} else {
+			newErrorf("Failed to add user %s fully (success: %d, err: %d), will retry next cycle", userModel.Email, successCount.Load(), errCount.Load()).AtWarning().WriteToLog()
+			
+			// 发生异常时，尝试回滚已成功添加的 Tag，防止产生半同步的孤立账号
+			if successCount.Load() > 0 {
+				newErrorf("Rolling back partially added user %s from tags", userModel.Email).AtWarning().WriteToLog()
+				var rollbackWg sync.WaitGroup
+				for _, tag := range activeTags {
+					rollbackWg.Add(1)
+					go func(t string) {
+						defer rollbackWg.Done()
+						_ = p.handlerServiceClient.RemoveUser(t, userModel.Email)
+					}(tag)
+				}
+				rollbackWg.Wait()
+			}
+		}
 	}
 
 	return
 }
 
-func (p *Panel) convertUser(userModel UserModel) *protocol.User {
+func (p *Panel) convertUser(tag string, userModel UserModel) *protocol.User {
 	userCfg := p.UserConfig
-	inbound := getInboundConfigByTag(p.UserConfig.InboundTag, p.v2rayConfig.InboundConfigs)
+	inbound := getInboundConfigByTag(tag, p.v2rayConfig.InboundConfigs)
 	if inbound == nil {
 		return nil
 	}
@@ -271,7 +351,7 @@ func (p *Panel) convertUser(userModel UserModel) *protocol.User {
 	case "vless":
 		accountMsg = serial.ToTypedMessage(&vless.Account{
 			Id:   userModel.VmessID,
-			Flow: userCfg.Flow,
+			Flow: userCfg.GetFlow(tag),
 		})
 	case "trojan":
 		accountMsg = serial.ToTypedMessage(&trojan.Account{
